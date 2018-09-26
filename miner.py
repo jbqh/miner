@@ -3,102 +3,139 @@
 
 import os
 import time
-from ConfigParser import ConfigParser
+import MySQLdb
 from paramiko import *
+from ConfigParser import ConfigParser
 from commands import getstatusoutput
 
-#def app_init():
-#if os.path.exists(os.curdir+'/miner.list'):
 
-def get_config():
-    conf = os.curdir + '/miner.conf'
-    if os.path.exists(conf):
-        config = ConfigParser()
-        config.read(config)
-        ghs = config.get('default','ghs')
-        maillist = config.get('default','maillist')
-        if ghs.isdigit():
-            ghs = int(ghs)
-        else:
-            ghs = 13000
-        if maillist is None:
-            maillist = 'jbqh@qq.com'
-    else:
-        ghs = 13000
-        maillist = 'jbqh@qq.com'
+class Miner():
+            
+    def __init__(self):
+       self.ghs = 13000
+       self.maillist = 'abc@qq.com'
+       self.hostlist = []
+       self.onlinelist = []
+       self.offlinelist = []
+       self.lowerlist = []
+       msg = '=================================== start to check miner =================================\n'
+       fs = open(os.curdir + '/miner.log','a')
+       fs.writelines(msg)
+       fs.close()
+       self.__check_host__()
+       self.__get_config__()
+
+    #check miner list 
+    def __check_host__(self):
+        minerlist = os.curdir + '/miner.list'
+        if not os.path.exists(minerlist):
+            msg = 'miner.list is not exist!' 
+            exit(msg)
+            
+        fs = open(minerlist,'r')
+        for line in fs:
+            line = line.strip()
+            if line:
+                if line.startswith('#') or line.startswith(';'):
+                    continue
+                self.hostlist.append(line)
+        fs.close()
+        self.__check_miner_status(self.hostlist)
         
-    return (ghs,maillist)
-    
-def check_active(host):
-    cmd = 'ping -c 2 %s &> /dev/null' % host
-    if getstatusoutput(cmd)[0] == 0:
-        return 0
-    else:
-        return 1
+    #check miner status,online or offline    
+    def __check_miner_status(self,hostlist):
+        if not hostlist:
+            msg = 'no miner host in miner.list'
+            exit(msg)
+            
+        for miner in hostlist:
+            cmd = 'ping -c 2 %s &> /dev/null' % miner
+            if getstatusoutput(cmd)[0] == 0:
+                self.onlinelist.append(miner)
+            else:
+                msg = ' [ERROR] miner %s is not connected,please check it!' % miner
+                self.__save_logs__(msg)
+                self.offlinelist.append(miner)
+            
+    #read config file if exist, or use default
+    def __get_config__(self):
+        conf =os.curdir + '/miner.conf'
+        try:
+            if os.path.exists(conf):
+                config = ConfigParser()
+                config.read(conf)
+                self.ghs = int(config.get('default','ghs',self.ghs))
+                self.maillist = config.get('default','maillist',self.maillist)
+        except:
+            pass
+
+    def __save_logs__(self,msg):
+        logfile = os.curdir + '/miner.log'
+        sj = time.strftime('%F %T',time.localtime())
+        fs = open(logfile,'a')
+        msg = sj + msg + '\n'
+        fs.writelines(msg)
+        fs.close()
         
-def get_ghs(host):
-    cmd = "bmminer-api -o | awk -F',' '{print $7}' | cut -d'=' -f2"
-    ssh = SSHClient()
-    ssh.set_missing_host_key_policy(AutoAddPolicy())
-    (ghs,maillist) = get_config()
-    try:
-        ssh.connect(host,22,'root','admin')
-        (stdin,stdout,stderr) = ssh.exec_command(cmd)
-        curghs = stdout.read()
-        if curghs:
-            curghs = float(curghs)
-        else:
-            curghs = 0
-        if curghs > ghs:
-            return (0,curghs)
-        else:
-            return (1,curghs)
-    except:
-		print 'a'
+    #calc miner's ghs
+    def get_ghs(self,miner):
+        cmd = "bmminer-api -o | awk -F',' '{print $7}' | cut -d'=' -f2"
+        ssh = SSHClient()
+        ssh.set_missing_host_key_policy(AutoAddPolicy())
+        try:
+            ssh.connect(miner,22,'root','admin')
+            (stdin,stdout,stderr) = ssh.exec_command(cmd)
+            curghs = stdout.read()
+            if curghs:
+                curghs = float(curghs)
+            else:
+                curghs = self.ghs - 1
+                
+            if curghs > self.ghs:
+                msg = " [INFO] miner %s status is normal,current ghs is: %.2f" % (miner,curghs)
+            else:
+                msg = " [WARNING] miner %s ghs is lower than %d,current ghs is %.2f" % (miner,self.ghs,curghs)
+                msg1 = "miner %s ghs is lower than %d,current ghs is %.2f" % (miner,self.ghs,curghs)
+                self.lowerlist.append(msg1)
 
-def miner_log(msg):
-    #0 - fatal
-    #1 - info
-    sj = time.strftime('%F %T',time.localtime())
-    flog = os.curdir + '/miner.log'
-    fs = open(flog,'a+')
-    m = sj + msg
-    print m
-    fs.writelines(m) 
-    fs.close()
-
-def main():
-    mlist_file = os.curdir + '/miner.list'
-    tmpfile = os.curdir + '/tmp'
-    if os.path.exists(tmpfile): os.remove(tmpfile)
-    try:
-        mlist = open(mlist_file,'r').readlines()
-        for host in mlist:
-            if host is None or host[0] == '#':  continue
-            host = host.rstrip('\n')
-            act = check_active(host)
-    except:
-        pass
+            self.__save_logs__(msg)
+        except Exception as e:
+            msg = 'Failed to Connect to miner %s.' % miner
+            self.__save_logs__(msg)
+            exit(e)
+            
+        ssh.close()   
         
-        
-#progmar starting...
-mlist = os.curdir + '/miner.list'
-if not os.path.exists(mlist):
-    msg = ' [FATAL] 致命错误，算力服务器列表不存在！\n'
-    miner_log(msg)
-    exit(99)
+    def send_mail(self):
+        offlinemsg = ''
+        lowermsg = ''
+        msg = ''
 
-t = os.curdir + '/miner.list'
-mlist = open(t,'r')
-offline = []
-lower = []
+        if self.offlinelist:
+            offline = ''
+            for host in self.offlinelist:
+                offline = offline + host + ';'
+            offlinemsg = 'miner [ %s ] can not connect!' % offline
+            msg = offlinemsg + '\n'
 
-if mlist:
-    for host in mlist:
-        host = host.rstrip('\n')
-        ip = host.strip()
-        if not len(ip) == 0 or not ip.startswith('#'):
-            status = check_active(host)
-            if status == 0:
-                (s,ghs) = get_ghs(host)
+        if self.lowerlist:
+            for host in self.lowerlist:
+                lowermsg = lowermsg + host + '\n'
+            msg = '\n' + msg + lowermsg + '\n'
 
+        if (not offlinemsg) and (not lowermsg): 
+            msg = ' [INFO] all miner is normal!'
+            self.__save_logs__(msg)
+            exit(0)
+        else: 
+            sub = '算力服务器异常'
+            cmd =  'echo "%s" | mail -s "%s" "%s"' % (msg,sub,self.maillist)
+            os.popen(cmd)
+            msg = ' [INFO] alert mail sent successfully' 
+            self.__save_logs__(msg)
+
+m = Miner()
+minerlist = m.onlinelist
+for i in minerlist:
+    m.get_ghs(i)
+m.send_mail()
