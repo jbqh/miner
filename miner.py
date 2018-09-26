@@ -114,7 +114,7 @@ class Miner():
         if self.offlinelist:
             offline = ''
             for host in self.offlinelist:
-                offline = offline + host + ';'
+                offline = offline + host + ' '
             offlinemsg = 'miner [ %s ] can not connect!' % offline
             msg = offlinemsg + '\n'
 
@@ -136,6 +136,9 @@ class Miner():
 
 m = Miner()
 minerlist = m.onlinelist
-for i in minerlist:
-    m.get_ghs(i)
-m.send_mail()
+if minerlist:
+	for i in minerlist:
+		m.get_ghs(i)
+	m.send_mail()
+else:
+	exit('unknow error')
